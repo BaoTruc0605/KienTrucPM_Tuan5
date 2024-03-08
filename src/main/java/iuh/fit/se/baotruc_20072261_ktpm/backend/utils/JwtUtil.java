@@ -1,50 +1,92 @@
 package iuh.fit.se.baotruc_20072261_ktpm.backend.utils;
 
-import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.SignatureAlgorithm;
-import org.springframework.beans.factory.annotation.Value;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nimbusds.jose.*;
+import com.nimbusds.jose.crypto.MACSigner;
+import com.nimbusds.jose.crypto.MACVerifier;
+import com.nimbusds.jose.shaded.json.JSONObject;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
+import iuh.fit.se.baotruc_20072261_ktpm.backend.authen.UserPrincipal;
+//import lombok.extern.slf4j.Slf4j;
+//import net.minidev.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.text.ParseException;
 import java.util.Date;
-import java.util.function.Function;
 
 @Component
 public class JwtUtil {
 
-    @Value("${jwt.secret}")
-    private String secret;
+    private static Logger logger = LoggerFactory.getLogger(JwtUtil.class);
+    private static final String USER = "truc";
+    private static final String SECRET = "baotrucxinhdep";
 
-    public String extractUsername(String token) {
-        return extractClaim(token, Claims::getSubject);
+    public String generateToken(UserPrincipal user) {
+        String token = null;
+        try {
+            JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder();
+
+            builder.claim(USER, user);
+            builder.expirationTime(generateExpirationDate());
+            JWTClaimsSet claimsSet = builder.build();
+
+            SignedJWT signedJWT = new SignedJWT(new JWSHeader(JWSAlgorithm.HS256), claimsSet);
+            JWSSigner signer = new MACSigner(SECRET.getBytes());
+            signedJWT.sign(signer);
+
+            token = signedJWT.serialize();
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+        }
+        return token;
     }
 
-    public Date extractExpiration(String token) {
-        return extractClaim(token, Claims::getExpiration);
+    public Date generateExpirationDate() {
+        return new Date(System.currentTimeMillis() + 864000000);
     }
 
-    public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
-        final Claims claims = extractAllClaims(token);
-        return claimsResolver.apply(claims);
+
+    //--------------------getClaimsFromToken-------------------------
+    private JWTClaimsSet getClaimsFromToken(String token) {
+        JWTClaimsSet claims = null;
+        try {
+            SignedJWT signedJWT = SignedJWT.parse(token);
+            JWSVerifier verifier = new MACVerifier(SECRET.getBytes());
+            if (signedJWT.verify(verifier)) {
+                claims = signedJWT.getJWTClaimsSet();
+            }
+        } catch (ParseException | JOSEException e) {
+            logger.error(e.getMessage());
+        }
+        return claims;
     }
 
-    private Claims extractAllClaims(String token) {
-        return Jwts.parser().setSigningKey(secret).parseClaimsJws(token).getBody();
+    //--------------------getUserFromToken-------------------------
+    public UserPrincipal getUserFromToken(String token) {
+        UserPrincipal user = null;
+        try {
+            JWTClaimsSet claims = getClaimsFromToken(token);
+            if (claims != null && isTokenExpired(claims)) {
+                JSONObject jsonObject = (JSONObject) claims.getClaim(USER);
+                user = new ObjectMapper()
+                        .readValue(jsonObject.toJSONString(),UserPrincipal.class);
+            }
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+        }
+        return user;
     }
 
-    private Boolean isTokenExpired(String token) {
-        return extractExpiration(token).before(new Date());
+    //--------------------getExpirationDateFromToken-------------------------
+    private Date getExpirationDateFromToken(JWTClaimsSet claims) {
+        return claims != null ? claims.getExpirationTime() : new Date();
     }
 
-    public String generateToken(String username) {
-        return Jwts.builder().setSubject(username)
-                .setIssuedAt(new Date(System.currentTimeMillis()))
-                .setExpiration(new Date(System.currentTimeMillis() + 1000 * 60 * 60 * 10)) // Token expiry time
-                .signWith(SignatureAlgorithm.HS256, secret).compact();
-    }
-
-    public Boolean validateToken(String token, String username) {
-        final String extractedUsername = extractUsername(token);
-        return (extractedUsername.equals(username) && !isTokenExpired(token));
+    //--------------------isTokenExpired-------------------------
+    private boolean isTokenExpired(JWTClaimsSet claims) {
+        return getExpirationDateFromToken(claims).after(new Date());
     }
 }
